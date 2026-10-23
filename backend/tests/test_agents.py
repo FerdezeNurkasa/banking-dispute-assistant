@@ -39,7 +39,7 @@ def test_duplicate_charge_is_auto_resolved(fake_llm):
     assert [c["tool"] for c in state["evidence"]["tool_calls"]] == ["get_transaction", "find_similar_charges"]
     # every agent left an audit entry (fraud + policy ran in parallel, both recorded)
     actors = [a["actor"] for a in state["audit"]]
-    for agent in ["intake_agent", "investigator_agent", "fraud_agent", "policy_agent", "decision_agent", "router"]:
+    for agent in ["privacy_guard", "intake_agent", "investigator_agent", "fraud_agent", "policy_agent", "decision_agent", "router"]:
         assert agent in actors
 
 
@@ -56,3 +56,16 @@ def test_low_confidence_goes_to_human_review(fake_llm):
     fake_llm(category="subscription_cancelled", fraud=5, decision="refund", confidence=0.5)
     state = _run("C003", "T3001", "I cancelled StreamPlus last month but was charged again.")
     assert state["route"] == "needs_review"
+
+
+def test_personal_data_never_reaches_the_llm(fake_llm):
+    fake = fake_llm(category="unauthorized", fraud=90, decision="escalate", confidence=0.6,
+                    tool_plan=[[("get_customer_history", {"customer_id": "C002"})]])
+    state = _run("C002", "T2001", "I am Drita Berisha, card 4111 1111 1111 1111 was used. "
+                                  "Call me on +383 44 123 456 or write to drita.b@gmail.com")
+
+    sent_to_llm = " ".join(fake.seen)
+    for secret in ["Drita", "Berisha", "4111", "123 456", "drita.b@gmail.com"]:
+        assert secret not in sent_to_llm
+    assert "[CARD_NUMBER]" in sent_to_llm and "[CUSTOMER]" in sent_to_llm
+    assert state["privacy"]["redactions"] == {"CARD_NUMBER": 1, "PHONE": 1, "EMAIL": 1, "NAME": 1}

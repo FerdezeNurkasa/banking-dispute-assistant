@@ -1,12 +1,34 @@
-"""Demo data: three customers, each set up for a different dispute scenario."""
+"""Demo data: bank employees (users) and three customers, each set up for a different dispute scenario."""
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.db import Customer, SessionLocal, Transaction
+from app.config import settings
+from app.db import Customer, SessionLocal, Transaction, User
+from app.security import hash_password
+
+DEMO_USERS = [
+    ("arta", "Arta Gashi", "agent"),     # submits disputes for customers
+    ("ana", "Ana Morina", "reviewer"),   # approves or rejects risky disputes
+    ("leon", "Leon Shala", "reviewer"),  # second reviewer, so the four-eyes rule can be demonstrated
+]
 
 
 def seed():
+    seed_users()
+    seed_customers()
+
+
+def seed_users():
+    with SessionLocal() as db:
+        if db.scalar(select(User).limit(1)):
+            return
+        db.add_all([User(username=u, full_name=n, role=r, password_hash=hash_password(settings.DEMO_PASSWORD))
+                    for u, n, r in DEMO_USERS])
+        db.commit()
+
+
+def seed_customers():
     with SessionLocal() as db:
         if db.scalar(select(Customer).limit(1)):
             return

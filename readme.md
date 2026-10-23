@@ -22,10 +22,14 @@ React (Vite)  ──►  API Gateway  ──►  Lambda (FastAPI + Mangum, Docke
 ### Agent workflow
 
 ```
-intake ─► investigator ─┬─► fraud_agent  ─┬─► decision ─► router ─► END
-                        └─► policy_agent ─┘
-                           (run in parallel)
+privacy_guard ─► intake ─► investigator ─┬─► fraud_agent  ─┬─► decision ─► router ─► END
+                                         └─► policy_agent ─┘
+                                            (run in parallel)
 ```
+
+| Agent | What it does | Technique |
+|---|---|---|
+| **Privacy guard** | Masks card numbers, IBANs, emails, phone numbers and the customer's name before any LLM call | Regex + known names (no LLM) |
 
 | Agent | What it does | Technique |
 |---|---|---|
@@ -36,12 +40,31 @@ intake ─► investigator ─┬─► fraud_agent  ─┬─► decision ─�
 | **Decision** | Proposes refund / reject / escalate, with a rationale and a customer message | Structured output |
 | **Router** | Sends the case to a human if fraud ≥ 70, amount ≥ 1000 EUR, low confidence or escalation | Plain code (no LLM) |
 
+### Security & compliance
+| Control | How it works |
+|---|---|
+| **Authentication** | `POST /auth/login` returns a JWT (HS256, 60 min). Passwords are stored as salted PBKDF2-SHA256 hashes (600,000 iterations) |
+| **Roles** | `agent` submits disputes; only `reviewer` can approve or reject (`403` otherwise) |
+| **Four-eyes principle** | A reviewer can never review a dispute they submitted themselves |
+| **Identity from the token** | The reviewer's name is taken from the token, never from the request body, so nobody can act in someone else's name |
+| **Account lockout** | 5 wrong passwords lock the account for 15 minutes; wrong user and wrong password give the same error |
+| **Instant revocation** | The user is checked in the database on every request, so a deactivated employee loses access immediately |
+| **PII masking** | The `privacy_guard` node masks personal data before any LLM call; tools return no names (data minimisation). The original text stays in our database; the customer's name is put back into the message only after the LLM is done |
+| **Audit trail** | Who submitted, every agent step, and who reviewed (with the agent's suggestion and the human's decision) |
+| **Security headers** | `nosniff`, `X-Frame-Options: DENY`, `no-store` caching on all responses |
+
+Demo users (created on first start, password = `DEMO_PASSWORD`, default `Demo!2026`):
+`arta` (agent), `ana` (reviewer), `leon` (reviewer).
+
+### Analytics (`GET /analytics` and the Analytics tab)
+Automation rate · human override rate (how often reviewers disagree with the agents) · disputes waiting for review ·
+average fraud score · refunded amount · end-to-end workflow time · disputes by category · fraud risk distribution ·
+average time per agent · disputes per day.
+
 ### Production concerns covered
 - **Human in the loop:** risky cases wait for a reviewer (`POST /disputes/{id}/review`).
-- **Auditability:** every agent step (output, duration) and every human decision is stored in `audit_logs`.
 - **Reliability:** LLM outputs are validated with Pydantic, tool loops have a hard limit, and failures are logged and mark the dispute `failed`.
-- **Access control:** optional `X-API-Key` (can be replaced by an API Gateway authorizer).
-- **Testing:** 11 pytest tests with a fake LLM, so the workflow is tested offline and for free.
+- **Testing:** 19 pytest tests with a fake LLM (auth, roles, four-eyes, lockout, PII never reaching the LLM, analytics), so everything is tested offline and for free.
 
 ## Run locally
 
@@ -114,7 +137,7 @@ aws lambda create-function --function-name dispute-assistant --region $REGION \
   --code ImageUri=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/$REPO:latest \
   --role arn:aws:iam::$ACCOUNT:role/dispute-lambda-role \
   --timeout 60 --memory-size 1024 \
-  --environment "Variables={DATABASE_URL=postgresql+psycopg2://...,OPENAI_API_KEY=sk-...,API_KEY=choose-a-secret,CORS_ORIGINS=*}"
+  --environment "Variables={DATABASE_URL=postgresql+psycopg2://...,OPENAI_API_KEY=sk-...,JWT_SECRET=a-long-random-string,DEMO_PASSWORD=choose-one,CORS_ORIGINS=*}"
 ```
 (For a real system, store secrets in AWS Secrets Manager instead of plain environment variables.)
 
@@ -156,7 +179,8 @@ aws lambda update-function-code --function-name dispute-assistant --image-uri $A
 
 ## Possible next steps
 - Async processing with SQS + a worker Lambda
-- Cognito login with roles (agent vs reviewer)
+- Single sign-on (Amazon Cognito / company login) instead of local passwords
+- Database migrations with Alembic
 - LangGraph `interrupt()` + checkpointer for resumable human-in-the-loop
 - Infrastructure as Code (Terraform or AWS SAM) for the AWS setup
 - CloudWatch dashboard: dispute volume, auto-resolution rate, agent latency

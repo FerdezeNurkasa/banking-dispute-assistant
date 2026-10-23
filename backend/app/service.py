@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from app.agents.graph import dispute_graph
-from app.db import AuditLog, Dispute, SessionLocal
+from app.db import AuditLog, Customer, Dispute, SessionLocal
 from app.search import index_dispute
 
 log = logging.getLogger(__name__)
@@ -33,13 +33,18 @@ def process_dispute(dispute_id: int) -> Dispute:
                             details=entry["details"], duration_ms=entry["duration_ms"],
                             created_at=datetime.fromisoformat(entry["at"])))
 
+        # Re-identification happens only inside our system, after the LLM is done
+        customer = db.get(Customer, dispute.customer_id)
+        first_name = customer.name.split()[0] if customer else "customer"
+        state["decision"]["customer_message"] = state["decision"]["customer_message"].replace("[CUSTOMER]", first_name)
+
         dispute.category = state["intake"]["category"]
         dispute.fraud_score = state["fraud"]["fraud_score"]
         dispute.decision = state["decision"]["decision"]
         dispute.confidence = state["decision"]["confidence"]
         dispute.status = "needs_review" if state["route"] == "needs_review" else "resolved"
         dispute.result = {k: state[k] for k in
-                          ("transaction", "intake", "evidence", "fraud", "policy", "decision", "route", "route_reasons")}
+                          ("privacy", "transaction", "intake", "evidence", "fraud", "policy", "decision", "route", "route_reasons")}
         db.commit()
         db.refresh(dispute)
         index_dispute(dispute)

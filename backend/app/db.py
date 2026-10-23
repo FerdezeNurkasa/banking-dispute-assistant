@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 from app.config import settings
@@ -16,6 +16,19 @@ def utcnow():
 
 class Base(DeclarativeBase):
     pass
+
+
+class User(Base):
+    """Bank employees who use the app. Roles: "agent" (submits disputes) and "reviewer" (approves risky ones)."""
+
+    __tablename__ = "users"
+    username: Mapped[str] = mapped_column(String(40), primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(100))
+    role: Mapped[str] = mapped_column(String(20))
+    password_hash: Mapped[str] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Customer(Base):
@@ -44,7 +57,8 @@ class Dispute(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), index=True)
     transaction_id: Mapped[str] = mapped_column(ForeignKey("transactions.id"))
-    description: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)  # original text; only masked text is sent to the LLM
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.username"))
     status: Mapped[str] = mapped_column(String(30), default="processing", index=True)
     category: Mapped[str | None] = mapped_column(String(40))
     fraud_score: Mapped[int | None] = mapped_column(Integer)

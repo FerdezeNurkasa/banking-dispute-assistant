@@ -12,6 +12,7 @@ class DisputeState(TypedDict, total=False):
     transaction_id: str
     description: str
 
+    privacy: dict
     transaction: dict
     intake: dict
     evidence: dict

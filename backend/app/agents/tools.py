@@ -34,7 +34,8 @@ def get_customer_history(customer_id: str, limit: int = 30) -> dict:
             .order_by(Transaction.created_at.desc()).limit(limit)
         ).all()
         return {
-            "customer": {"id": c.id, "name": c.name, "home_country": c.home_country},
+            # data minimisation: the LLM gets no name, only what it needs for the investigation
+            "customer": {"id": c.id, "home_country": c.home_country},
             "transactions": [_tx_dict(t) for t in txs],
         }
 

@@ -11,6 +11,8 @@ from app.agents.policies import retrieve_rules
 from app.agents.state import Decision, DisputeState, FraudAssessment, IntakeResult, PolicyCheck
 from app.agents.tools import INVESTIGATOR_TOOLS, TOOLS_BY_NAME, get_customer_history, get_transaction
 from app.config import settings
+from app.db import Customer, SessionLocal
+from app.privacy import mask_pii
 
 
 def audited(agent_name: str):
@@ -35,6 +37,18 @@ def audited(agent_name: str):
 def _parse_dt(value: str) -> datetime:
     dt = datetime.fromisoformat(value)
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# ------------------------------------------------------------------ 0. Privacy guard (plain code, no LLM)
+@audited("privacy_guard")
+def privacy_guard(state: DisputeState) -> dict:
+    """Masked personal data before any LLM call"""
+    with SessionLocal() as db:
+        customer = db.get(Customer, state["customer_id"])
+        names = [customer.name] if customer else []
+    masked, counts = mask_pii(state["description"], names)
+    # Overwrites "description" in the state: every agent after this point only sees the masked text
+    return {"description": masked, "privacy": {"redactions": counts, "total": sum(counts.values())}}
 
 
 # ------------------------------------------------------------------ 1. Intake agent
@@ -156,7 +170,9 @@ def decision_agent(state: DisputeState) -> dict:
     decision: Decision = llm.invoke([
         SystemMessage("You are a senior dispute officer. Based on the evidence, fraud assessment and policy "
                       "check, decide: refund, reject or escalate. Never reject when information is missing; "
-                      "escalate instead. Write a clear rationale and a polite customer message."),
+                      "escalate instead. Write a clear rationale and a polite customer message. "
+                      "Personal data is masked with placeholders like [CUSTOMER] or [CARD_NUMBER]: keep them "
+                      "as they are and address the customer as [CUSTOMER]."),
         HumanMessage(json.dumps({
             "complaint": state["description"], "transaction": state["transaction"],
             "intake": state["intake"], "evidence": state["evidence"]["summary"],
